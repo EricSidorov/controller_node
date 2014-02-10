@@ -17,12 +17,12 @@ class EffortPositionController(Controller):
         self._last_err = 0.0
         self._last_t = rospy.Time()
     def update(self,cur_state):
-        dt = (cur_state['Time'] - self._last_t).to_sec()
+        dt = (cur_state['Time'] - self._last_t).to_nsec()
         err = self._ref['pos']-cur_state['pos']
         self._I += err*dt
-        D = (err - self._last_err)/dt
+        D = float(err - self._last_err)/float(dt)
         # print 'dt = ', dt,'E = ',err, 'D = ', D, 'I = ', self._I
-        cmd = (self._params['P']*err + self._params['I']*self._I + self._params['D']*D)*(1-self._params['k_eff']) + self._ref['eff']*self._params['k_eff']
+        cmd = (float(self._params['P'])*float(err) + self._params['I']*self._I + float(self._params['D'])*float(D))*(1.0-self._params['k_eff']) + self._ref['eff']*self._params['k_eff']
         self._last_t = cur_state['Time']
         self._last_err = err
         return cmd
@@ -61,6 +61,7 @@ class MultiEffPosCon(MultiJointController):
         super(MultiEffPosCon,self).add_joint(joint)
         rospy.loginfo('Loaded EffPosCon on joint %s', joint.get_name())
 
+###########################
 
 def ParseJointStateMsg(msg):
     d = dict({})
@@ -76,7 +77,7 @@ if __name__ == '__main__':
             self.CON.load('/gcb')
             self._last_t = rospy.Time(0)
         def on_state_update(self,msg):
-            if (msg.header.stamp - self._last_t)>=rospy.Duration(0.01):
+            if (msg.header.stamp - self._last_t)>=rospy.Duration(0.001):
                 state = ParseJointStateMsg(msg)
                 self.CON.update(state)
                 self._last_t = msg.header.stamp
