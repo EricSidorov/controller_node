@@ -5,8 +5,7 @@ from numpy import zeros
 from math import sin
 from Abstractions import *
 from sensor_msgs.msg import JointState
-from gazebo_msgs.msg import ModelState
-from gazebo_msgs.msg import LinkState
+from gazebo_msgs.msg import ModelState,LinkState,ContactsState
 from nav_msgs.msg import Odometry
 
 class EffortPositionController(Controller):
@@ -23,7 +22,8 @@ class EffortPositionController(Controller):
         self._last_err = 0.0
         self._last_t = rospy.Time()
     def update(self,cur_state):
-        dt = (cur_state['Time'] - self._last_t).to_nsec()/1e9
+        # dt = (cur_state['Time'] - self._last_t).to_nsec()/1e9
+        dt = (cur_state['Time'] - self._last_t).to_sec()
         err = self._ref['pos']-cur_state['pos']
         self._I += err*dt
         D = float(err - self._last_err)/float(dt)
@@ -74,10 +74,11 @@ class MultiEffPosCon(MultiJointController):
 
 ###########################
 
-def ParseJointStateMsg(msg):
+def ParseJointStateMsg(msg,Time):
     d = dict({})
     for k,name in enumerate(msg.name):
-        d.update({name:{'pos':msg.position[k], 'Time':rospy.Time(msg.header.stamp.secs,msg.header.stamp.nsecs)}})
+        # d.update({name:{'pos':msg.position[k], 'Time':rospy.Time(msg.header.stamp.secs,msg.header.stamp.nsecs)}})
+        d.update({name:{'pos':msg.position[k], 'Time':Time}})
     return d
 
 
@@ -91,6 +92,8 @@ if __name__ == '__main__':
             self.CON.load('/gcb')
             self._last_t = rospy.Time(0)
             self.JointsState = 0
+            self.LeftContact = 0
+            self.RightContact = 0
             self.GlobalPos = 0
             self.StartTime = 0
 
@@ -103,18 +106,18 @@ if __name__ == '__main__':
             ######################## GAIT PARAMETERS #########################
             ##################################################################
             if len(arg)<12:
-                self.SwingEff0 = 0.30        # Default swing effort
-                self.kAp = 1.0               # Aperture feedback gain
-                self.DesAp = 0.40            # Desired aperture
+                self.SwingEff0 = 0.80        # Default swing effort
+                self.kAp = 2.0               # Aperture feedback gain
+                self.DesAp = 0.38            # Desired aperture
                 self.SupAnkGain_p = 30       # Ankle gain p during support
                 self.SupAnkGain_d = 5        # Ankle gain d during support
                 self.SupAnkSetPoint = -0.05  # Support ankle set point
-                self.ToeOffEff0 = 4.0        # Toe-off effort
-                self.ToeOffDur = 0.22        # Toe-off duration
-                self.TotSwingDur = 0.80      # Swing duration
+                self.ToeOffEff0 = 5.5        # Toe-off effort
+                self.ToeOffDur = 0.13        # Toe-off duration
+                self.TotSwingDur = 0.75      # Swing duration
                 # self.FootExtEff = 0.65       # Foot extension effort (right before touch down)
-                self.FootExtDur = 0.22       # Foot extension duration
-                self.FreeSwingDur = 0.13     # Swing duration
+                self.FootExtDur = 0.20       # Foot extension duration
+                self.FreeSwingDur = 0.17     # Swing duration
                 
                 self.SwingEff = self.SwingEff0
                 self.ToeOffEff = self.ToeOffEff0
@@ -136,11 +139,17 @@ if __name__ == '__main__':
                 self.ToeOffEff = self.ToeOffEff0
 
         def on_state_update(self,msg):
-            if (msg.header.stamp - self._last_t)>=rospy.Duration(0.001):
-                state = ParseJointStateMsg(msg)
+            Now = rospy.Time.now()
+            if (Now - self._last_t)>=rospy.Duration(0.001):
+                # print (Now - self._last_t) / 1000000.0
+                # print 'delay = ', (msg.header.stamp-rospy.Time.now()).to_sec()*1000.0
+                # self.AvgDelay = self.AvgDelay+
+                state = ParseJointStateMsg(msg,Now)
+                # print state
                 self.CON.update(state)
-                self._last_t = msg.header.stamp
+                self._last_t = Now
                 self.JointsState = msg
+
 
         def Odom_cb(self,msg):
             self.GlobalPos = msg.pose.pose.position
@@ -151,6 +160,24 @@ if __name__ == '__main__':
             if self.Go == 1 and (self.GlobalPos.z<0.6 or self.GlobalPos.z>1.4 or (self.TimeElapsed>self.TimeOut and self.TimeOut>0)):
                 # if the robot fell, stop running and return fitness
                 self.Go = 0
+
+
+        def left_contact_cb(self,msg):
+            if self.LeftContact == 0 and len(msg.states)>4:
+                self.LeftContact = 1
+                print "Left touch down - Contacts: ",len(msg.states)
+            if self.LeftContact == 1 and len(msg.states) == 0:
+                self.LeftContact = 0
+                # print "Left swing"
+
+        def right_contact_cb(self,msg):
+            if self.RightContact == 0 and len(msg.states)>4:
+                self.RightContact = 1
+                print "Right touch down - Contacts: ",len(msg.states)
+            if self.RightContact == 1 and len(msg.states) == 0:
+                self.RightContact = 0
+                # print "Right swing"
+
 
 
         def pid_param_update(self):
@@ -356,6 +383,8 @@ if __name__ == '__main__':
     eff_pos_node.Go=0
     rospy.Subscriber("/gcb/joint_states", JointState, eff_pos_node.on_state_update)
     rospy.Subscriber('/ground_truth_odom',Odometry, eff_pos_node.Odom_cb)
+    rospy.Subscriber('/left_foot_contact',ContactsState, eff_pos_node.left_contact_cb)
+    rospy.Subscriber('/right_foot_contact',ContactsState, eff_pos_node.right_contact_cb)
     eff_pos_node.pid_param_update()
     # Finished initializing the controller
 

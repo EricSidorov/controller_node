@@ -75,3 +75,7 @@ class MultiJointController(object):
         #states should be a dict with keys matching joint names
         for key in states:
             self._joints[key].update(states[key])
+
+    def reset(self):
+        for key in self._joints:
+            self._joints[key].reset()
