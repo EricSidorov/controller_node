@@ -13,24 +13,36 @@ class EffortPositionController(Controller):
     required_prm = ['P','I','D']
     def __init__(self, params):
         super(EffortPositionController, self).__init__(params)
+        self.debug_pub = rospy.Publisher('/debug_topic',Float64)
         self._ref = {'pos':0.0,'eff':0.0,'k_eff':0.0}
         self._I = 0.0
         self._last_err = 0.0
-        self._last_t = rospy.Time(0)
+        self._last_t = -1
+        self._d_flag = 1
     def reset(self):
         self._I = 0.0
         self._last_err = 0.0
-        self._last_t = rospy.Time()
+        self._last_t = -1
+    def set_ref(self,ref):
+        super(EffortPositionController,self).set_ref(ref)
+        self._d_flag = 0
+
     def update(self,cur_state):
+        if self._last_t == -1:
+            self._last_t = cur_state['Time']
+            return 0.0
         # dt = (cur_state['Time'] - self._last_t).to_nsec()/1e9
         dt = (cur_state['Time'] - self._last_t).to_sec()
         err = self._ref['pos']-cur_state['pos']
         self._I += err*dt
-        D = float(err - self._last_err)/float(dt)
+        D = self._d_flag*float(err - self._last_err)/float(dt)
+        if self._d_flag == 0:
+            self._d_flag = 1
         # print 'dt = ', dt,'E = ',err, 'D = ', D, 'I = ', self._I
         cmd = (float(self._params['P'])*float(err) + self._params['I']*self._I + float(self._params['D'])*float(D))*(1.0-self._ref['k_eff']) + self._ref['eff']*self._ref['k_eff']
         self._last_t = cur_state['Time']
         self._last_err = err
+        self.debug_pub.publish(dt)
         return cmd
 
 class EffortJointInterface(JointInterface):
@@ -74,11 +86,11 @@ class MultiEffPosCon(MultiJointController):
 
 ###########################
 
-def ParseJointStateMsg(msg,Time):
+def ParseJointStateMsg(msg):
     d = dict({})
     for k,name in enumerate(msg.name):
         # d.update({name:{'pos':msg.position[k], 'Time':rospy.Time(msg.header.stamp.secs,msg.header.stamp.nsecs)}})
-        d.update({name:{'pos':msg.position[k], 'Time':Time}})
+        d.update({name:{'pos':msg.position[k], 'Time':msg.header.stamp}})
     return d
 
 
@@ -87,17 +99,21 @@ if __name__ == '__main__':
         def __init__(self, arg = []):    
             rospy.init_node('MultiJointController')
             rospy.sleep(0.1)
-
+            self.initiated = False;
             self.CON = MultiEffPosCon()
             self.CON.load('/gcb')
-            self._last_t = rospy.Time(0)
-            self.JointsState = 0
+            self._last_t = -1
+            self.JointsState = JointState()
             self.LeftContact = 0
             self.RightContact = 0
             self.GlobalPos = 0
             self.StartTime = 0
 
+            self.l_contact_pub = rospy.Publisher('/l_contact_state',Float64)     
+            self.r_contact_pub = rospy.Publisher('/r_contact_state',Float64)
+
             self.ModelStatePub = rospy.Publisher('/gazebo/set_model_state',ModelState)
+            self.LinkStatePub = rospy.Publisher('/gazebo/set_link_state',LinkState)
             self.LinkStatePub = rospy.Publisher('/gazebo/set_link_state',LinkState)
             self.PubRate = 1000.0;
             rospy.sleep(0.1)
@@ -139,16 +155,25 @@ if __name__ == '__main__':
                 self.ToeOffEff = self.ToeOffEff0
 
         def on_state_update(self,msg):
-            Now = rospy.Time.now()
-            if (Now - self._last_t)>=rospy.Duration(0.001):
-                # print (Now - self._last_t) / 1000000.0
-                # print 'delay = ', (msg.header.stamp-rospy.Time.now()).to_sec()*1000.0
-                # self.AvgDelay = self.AvgDelay+
-                state = ParseJointStateMsg(msg,Now)
-                # print state
-                self.CON.update(state)
-                self._last_t = Now
-                self.JointsState = msg
+            # if not self.initiated:
+            #     self.initiated = 1
+            state = ParseJointStateMsg(msg)
+            self.CON.update(state)
+            self.JointsState = msg
+            self.l_contact_pub.publish(self.LeftContact*10)
+            self.r_contact_pub.publish(self.RightContact*10)
+            ####################################
+            # Now = rospy.Time.now()
+            # if (Now - self._last_t)>=rospy.Duration(0.001):
+            #     # print (Now - self._last_t) / 1000000.0
+            #     if (msg.header.stamp-rospy.Time.now()).to_nsec() > 0:
+            #         print 'delay = ', (msg.header.stamp-rospy.Time.now()).to_nsec()
+            #     # self.AvgDelay = self.AvgDelay+
+            #     state = ParseJointStateMsg(msg,Now)
+            #     # print state
+            #     self.CON.update(state)
+            #     self._last_t = Now
+            #     self.JointsState = msg
 
 
         def Odom_cb(self,msg):
@@ -217,6 +242,8 @@ if __name__ == '__main__':
             Count = 0
             Hold = 1
             while Hold:
+                # if not self.initiated:
+                #     continue
                 self.LinkStatePub.publish(LState)
                 # self.ModelStatePub.publish(State)
                 rospy.sleep(1.0/self.PubRate)

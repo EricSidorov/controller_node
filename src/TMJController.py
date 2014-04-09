@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 import rospy
-from std_msgs.msg import Float64
-from numpy import zeros,average
+import roslib
+roslib.load_manifest('controller_node')
+from std_msgs.msg import Float64,Int32
+from numpy import zeros,average,array
 from math import sin,sqrt,pi
 from Abstractions import *
 from sensor_msgs.msg import JointState
 from gazebo_msgs.msg import ContactsState
+from nav_msgs.msg import Odometry
+from tmj_control.msg import *
 
 class EffortPositionController(Controller):
     """PID position controller + feed-forward effort. k_eff=0: Pure PID, k_eff=1: Effort control"""
@@ -91,12 +95,16 @@ if __name__ == '__main__':
             self.CON.load('/tmj')
             self._last_t = rospy.Time(0)
             self.JointsState = 0
+            # self.mState = 0
             self.StartTime = 0
             self.StatePos = []
             self.StateVel = []
             self.StatePosDiff = []
             self.StateVelDiff = []
             self.MaxPoints = 10
+
+            # self.mCount = 0
+            # self.mPoints = 50
 
             # self.ModelStatePub = rospy.Publisher('/gazebo/set_model_state',ModelState)
             # self.LinkStatePub = rospy.Publisher('/gazebo/set_link_state',LinkState)
@@ -111,34 +119,30 @@ if __name__ == '__main__':
                 self._last_t = msg.header.stamp
                 self.JointsState = msg
 
-                # if self.ControlMode == 0:
-                #     self.CON.set_ref({'pole_axis':{'pos':0,'eff':self.Amp*sin(self.Freq*(rospy.Time.now().to_sec()-self.StartTime)),'k_eff':1.0}})
-                # else:
-                #     if rospy.Time.now().to_sec()-self.StartTime>1:
-                #         self.StartTime = rospy.Time.now().to_sec()
-                #         # if self.ref_pos>=2*pi:
-                #         #     self.ref_pos = 0
-                #         #     self.ref_dir = -1
-                #         # if self.ref_pos<=-2*pi:
-                #         #     self.ref_dir = 1
-                #         # self.ref_pos = self.ref_pos + self.ref_dir*pi/30.0
+                Cont_msg = ContactMsg()
+                Cont_msg.header.stamp = rospy.Time.now()
+                Cont_msg.data = Int32(self.Contact)
+                self.ContactPub.publish(Cont_msg)
 
-                #         self.CON.set_ref({'pole_axis':{'pos':self.ref_pos,'eff':0,'k_eff':0.0}})
 
         def foot_contact_cb(self,msg):
-            if self.Contact == 0 and len(msg.states)>4:
-                if self.Reflex == 1:
-                    self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[1],'eff':0,'k_eff':0.0}})
+            if self.Contact == 0:
+                if len(msg.states)>1:
+                    if self.Reflex == 1:
+                        self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[1],'eff':0,'k_eff':0.0}})
 
-                self.Contact = 1
-                print "Touch down - Contacts: ",len(msg.states)
-            if self.Contact == 1 and len(msg.states) == 0:
-                if self.Reflex == 1:
-                    self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[0],'eff':0,'k_eff':0.0}})
+                    self.Contact = 1
+                    print "Touch down - Contacts: ",len(msg.states)
+            else:
+                if len(msg.states) == 0:
+                    if self.Reflex == 1:
+                        self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[0],'eff':0,'k_eff':0.0}})
 
-                self.Contact = 0
-                self.SectionCross()
-                print "Lift off"
+                    self.Contact = 0
+                    print "Lift off"
+                    print "Detla T: msg = ",msg.header.stamp.to_sec()," | now = ",rospy.Time.now().to_sec()
+                    print "Detla T = ",msg.header.stamp.to_sec()-rospy.Time.now().to_sec()," - steps: ",(msg.header.stamp.to_sec()-rospy.Time.now().to_sec())*1000.0
+                    self.SectionCross()
 
 
         def pid_param_update(self):
@@ -185,8 +189,6 @@ if __name__ == '__main__':
                 self.StatePosDiff.append(self.JointsState.position[0]-self.StatePos[N-2])
                 self.StateVelDiff.append(self.JointsState.velocity[0]-self.StateVel[N-2])
 
-
-
             if N > self.MaxPoints:
                 self.StatePos.pop(0)
                 self.StateVel.pop(0)
@@ -198,6 +200,129 @@ if __name__ == '__main__':
 
                 # Calculate change
                 print 'Diff. Pos: ',average(self.StatePosDiff),' | Vel: ',average(self.StateVelDiff)
+
+
+    eff_pos_node = EffPosNode()
+    eff_pos_node.Contact = 0
+    eff_pos_node.piston_limit=[0.0,0.18]
+    eff_pos_node.spring0 = 0.7
+    eff_pos_node.spring_k = 750
+    eff_pos_node.spring_d = 10
+    eff_pos_node.CPGfreq = 1.5
+    eff_pos_node.CPGphase0 = 0.15
+    eff_pos_node.ContactPub = rospy.Publisher("/tmj/contact_state", ContactMsg)
+    rospy.Subscriber("/tmj/joint_states", JointState, eff_pos_node.on_state_update)
+    eff_pos_node.pid_param_update()
+
+    eff_pos_node.Initialize()
+    eff_pos_node.Reflex = 1
+    rospy.Subscriber('/foot_contact',ContactsState, eff_pos_node.foot_contact_cb)
+    # rospy.Subscriber('/ground_truth_odom2',Odometry, eff_pos_node.foot_mass_cb)
+    # Finished initializing the controller
+
+    eff_pos_node.Jump(3)
+
+    rospy.spin()
+
+
+
+############### USELESS CODE :( ###############
+        # def foot_contact_cb(self,msg):
+        #     self.mCount = self.mCount + 1
+        #     if self.mCount > self.mPoints:
+        #         if self.Contact == 0:
+        #             if len(msg.states)>0:
+        #                 if self.Reflex == 1:
+        #                     self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[1],'eff':0,'k_eff':0.0}})
+
+        #                 self.Contact = 1
+        #                 print self.mCount
+        #                 self.mCount = 0
+        #                 print "Touch down - Contacts: ",len(msg.states)
+        #         else:
+        #             if self.mState[0]>1e-4:
+        #                 if self.Reflex == 1:
+        #                     self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[0],'eff':0,'k_eff':0.0}})
+
+        #                 self.Contact = 0
+        #                 print self.mCount
+        #                 self.mCount = 0
+        #                 self.SectionCross()
+        #                 print "Lift off"
+
+
+        # def foot_mass_cb(self,msg):
+        #     self.mState = [msg.pose.pose.position.z, msg.twist.twist.linear.z]
+
+        #     self.mCount = self.mCount + 1
+        #     if self.mCount > self.mPoints:
+        #         if self.Contact == 0:
+        #             if self.mState[0]<=0:
+        #                 self.Contact = 1
+
+        #                 if self.Reflex == 1:
+        #                     self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[1],'eff':0,'k_eff':0.0}})
+
+        #                 print "Touch down - counts: ",self.mCount
+        #                 self.mCount = 0
+        #         else:
+        #             if self.mState[1]>1e-4:
+        #                 self.Contact = 0
+
+        #                 if self.Reflex == 1:
+        #                     self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[0],'eff':0,'k_eff':0.0}})
+
+        #                 print "Lift off - counts: ",self.mCount
+        #                 self.SectionCross()
+        #                 self.mCount = 0
+
+
+        # # def foot_mass_cb(self,msg):
+        # #     epsilon=1e-4
+        # #     touch = msg.pose.pose.position.z<epsilon
+        # #     lift = msg.twist.twist.linear.z>epsilon
+
+        # #     if self.Contact == 0 and touch==True and lift==False:
+        # #         if self.Reflex == 1:
+        # #             self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[1],'eff':0,'k_eff':0.0}})
+
+        # #         self.Contact = 1
+        # #         print "Touch down"
+        # #     if self.Contact == 1 and touch==False and lift==True:
+        # #         if self.Reflex == 1:
+        # #             self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[0],'eff':0,'k_eff':0.0}})
+
+        # #         self.Contact = 0
+        # #         self.SectionCross()
+        # #         print "Lift off"
+
+        # # def foot_mass_cb(self,msg):
+        # #     epsilon=1e-4
+        # #     self.mState.append([msg.pose.pose.position.z, msg.twist.twist.linear.z])
+        # #     if len(self.mState) > self.mPoints:
+        # #         self.mState.pop(0)
+
+        # #         # Calculate var of speed
+        # #         SpeedMean = array(self.mState)[:,1].mean() 
+        # #         SpeedVar = array(self.mState)[:,1].var()
+        # #         # print SpeedVar/SpeedMean
+
+        # #         if self.Contact == 0 and SpeedVar/SpeedMean<-0.1:
+        # #             if self.Reflex == 1:
+        # #                 self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[1],'eff':0,'k_eff':0.0}})
+
+        # #             self.Contact = 1
+        # #             self.mState = []
+        # #             print "Touch down - ",rospy.Time.now().to_sec()
+
+        # #         if self.Contact == 1 and msg.twist.twist.linear.z>epsilon and msg.pose.pose.position.z<epsilon:
+        # #             if self.Reflex == 1:
+        # #                 self.CON.set_ref({'spring_axis':{'pos':self.spring0+self.piston_limit[0],'eff':0,'k_eff':0.0}})
+
+        # #             self.Contact = 0
+        # #             self.SectionCross()
+        # #             print "Lift off"
+
 
 
         # def ResetToPose(self,Pose,dur):
@@ -245,26 +370,3 @@ if __name__ == '__main__':
         #             Count = 0
 
         #     rospy.sleep(0.2*dur)
-
-
-    eff_pos_node = EffPosNode()
-    eff_pos_node.Contact = 0
-    eff_pos_node.piston_limit=[0.0,0.11]
-    eff_pos_node.spring0 = 0.7
-    eff_pos_node.spring_k = 750
-    eff_pos_node.spring_d = 10
-    eff_pos_node.CPGfreq = 1.5
-    eff_pos_node.CPGphase0 = 0.15
-    rospy.Subscriber("/tmj/joint_states", JointState, eff_pos_node.on_state_update)
-    eff_pos_node.pid_param_update()
-
-    eff_pos_node.Initialize()
-    eff_pos_node.Reflex = 1
-    rospy.Subscriber('/foot_contact',ContactsState, eff_pos_node.foot_contact_cb)
-    # Finished initializing the controller
-
-    eff_pos_node.Jump(5)
-
-    rospy.spin()
-
-

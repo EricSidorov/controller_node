@@ -4,7 +4,7 @@ project(controller_node)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED)
+find_package(catkin REQUIRED )
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -75,12 +75,12 @@ find_package(catkin REQUIRED)
 ## LIBRARIES: libraries you create in this project that dependent projects also need
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
-catkin_package(
+# catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES controller_node
-#  CATKIN_DEPENDS other_catkin_pkg
+ # LIBRARIES tmj_control
+ # CATKIN_DEPENDS tmj_control
 #  DEPENDS system_lib
-)
+# )
 
 ###########
 ## Build ##

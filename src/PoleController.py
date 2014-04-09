@@ -109,12 +109,12 @@ if __name__ == '__main__':
                 else:
                     if rospy.Time.now().to_sec()-self.StartTime>1:
                         self.StartTime = rospy.Time.now().to_sec()
-                        # if self.ref_pos>=2*pi:
-                        #     self.ref_pos = 0
-                        #     self.ref_dir = -1
-                        # if self.ref_pos<=-2*pi:
-                        #     self.ref_dir = 1
-                        # self.ref_pos = self.ref_pos + self.ref_dir*pi/30.0
+                        if self.ref_pos>=2*pi:
+                            self.ref_pos = 0
+                            self.ref_dir = -1
+                        if self.ref_pos<=-2*pi:
+                            self.ref_dir = 1
+                        self.ref_pos = self.ref_pos + self.ref_dir*pi/30.0
 
                         self.CON.set_ref({'pole_axis':{'pos':self.ref_pos,'eff':0,'k_eff':0.0}})
 
